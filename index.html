@@ -1,77 +1,224 @@
 <!DOCTYPE html>
 <html lang="tr">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-  <meta name="theme-color" content="#1a73e8" />
-  <meta name="description" content="Kameranızla yazıyı tarayın, seçtiğiniz dile çevirin" />
-  <link rel="manifest" href="manifest.json" />
-  <title>Kamera Çevirmeni</title>
-  <link rel="stylesheet" href="css/style.css" />
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Kamera Çevirmeni</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: system-ui, sans-serif; background: #f5f7fa; padding: 12px; max-width: 720px; margin: 0 auto; }
+  h1 { font-size: 1.1rem; margin-bottom: 10px; color: #1a73e8; }
+  .row { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+  select, button, textarea { font-size: 0.95rem; padding: 10px; border-radius: 8px; border: 1px solid #ddd; }
+  button { background: #1a73e8; color: #fff; border: none; font-weight: 600; cursor: pointer; }
+  button:disabled { opacity: 0.5; }
+  #video { width: 100%; max-height: 50vh; background: #000; border-radius: 12px; object-fit: cover; }
+  #canvas { display: none; }
+  .box { background: #fff; border-radius: 12px; padding: 12px; margin-top: 10px; min-height: 60px; white-space: pre-wrap; word-break: break-word; }
+  .status { font-size: 0.85rem; color: #666; margin: 6px 0; min-height: 18px; }
+  .label { font-size: 0.8rem; color: #1a73e8; font-weight: 600; margin-top: 8px; }
+  .error { color: #dc2626; }
+</style>
 </head>
 <body>
-  <header>
-    <h1>Kamera Çevirmeni</h1>
-    <div class="lang-selector">
-      <label for="target-lang">Hedef Dil:</label>
-      <select id="target-lang">
-        <option value="tr" selected>Türkçe</option>
-        <option value="en">İngilizce</option>
-        <option value="de">Almanca</option>
-        <option value="fr">Fransızca</option>
-        <option value="es">İspanyolca</option>
-        <option value="it">İtalyanca</option>
-        <option value="pt">Portekizce</option>
-        <option value="ru">Rusça</option>
-        <option value="ar">Arapça</option>
-        <option value="zh">Çince</option>
-        <option value="ja">Japonca</option>
-        <option value="ko">Korece</option>
-      </select>
-    </div>
-  </header>
+<h1>Kamera Çevirmeni</h1>
 
-  <main>
-    <section class="camera-section">
-      <video id="camera-preview" autoplay playsinline muted></video>
-      <canvas id="capture-canvas" style="display:none"></canvas>
-      <div class="camera-controls">
-        <button id="capture-btn" class="btn-primary">📷 Yakala ve Çevir</button>
-        <button id="auto-btn" class="btn-secondary">🔄 Canlı Tarama</button>
-        <label for="file-input" class="btn-secondary">🖼️ Galeri</label>
-        <input type="file" id="file-input" accept="image/*" hidden />
-      </div>
-    </section>
+<div class="row">
+  <select id="targetLang">
+    <option value="tr" selected>Türkçe</option>
+    <option value="en">İngilizce</option>
+    <option value="de">Almanca</option>
+    <option value="fr">Fransızca</option>
+    <option value="ar">Arapça</option>
+    <option value="ru">Rusça</option>
+  </select>
+  <button id="captureBtn">📷 Yakala ve Çevir</button>
+  <label style="background:#fff;padding:10px;border-radius:8px;border:1px solid #ddd;cursor:pointer;">
+    🖼️ Galeri <input type="file" id="fileInput" accept="image/*" hidden>
+  </label>
+</div>
 
-    <section class="status-section">
-      <div id="status-text" class="status-text"></div>
-      <div id="detected-lang" class="detected-lang"></div>
-      <div class="progress-bar">
-        <div id="ocr-progress" class="progress-fill"></div>
-      </div>
-    </section>
+<video id="video" autoplay playsinline muted></video>
+<canvas id="canvas"></canvas>
 
-    <section class="manual-section">
-      <h2>Klavyeyle Çevir</h2>
-      <textarea id="manual-text" rows="3" placeholder="Çevrilecek metni buraya yazın..."></textarea>
-      <button id="manual-translate" class="btn-primary">Çevir</button>
-    </section>
+<div id="status" class="status">Kamera başlatılıyor...</div>
 
-    <section class="result-section">
-      <h2>OCR Sonucu</h2>
-      <div id="ocr-text" class="result-box" aria-live="polite"></div>
-      <h2>Çeviri</h2>
-      <div id="translated-text" class="result-box" aria-live="polite"></div>
-    </section>
+<div class="label">OCR Sonucu</div>
+<div id="ocrText" class="box"></div>
 
-    <button id="install-btn" class="btn-install" style="display:none">📲 Uygulamayı Yükle</button>
-  </main>
+<div class="label">Çeviri</div>
+<div id="translatedText" class="box"></div>
 
-  <footer>
-    <small>OCR: Tesseract.js (cihaz üzeri) • Çeviri: MyMemory</small>
-  </footer>
+<div class="row" style="margin-top:10px;">
+  <textarea id="manualText" rows="2" placeholder="Klavyeyle metin girin..." style="flex:1;min-width:200px;"></textarea>
+  <button id="manualBtn">Çevir</button>
+</div>
 
-  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
-  <script type="module" src="js/app.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+<script>
+const video = document.getElementById('video');
+const canvas = document.getElementById('canvas');
+const statusEl = document.getElementById('status');
+const ocrEl = document.getElementById('ocrText');
+const transEl = document.getElementById('translatedText');
+const targetLang = document.getElementById('targetLang');
+const captureBtn = document.getElementById('captureBtn');
+const fileInput = document.getElementById('fileInput');
+const manualText = document.getElementById('manualText');
+const manualBtn = document.getElementById('manualBtn');
+
+let worker = null;
+let busy = false;
+
+function setStatus(msg, isError) {
+  statusEl.textContent = msg;
+  statusEl.className = 'status' + (isError ? ' error' : '');
+}
+
+// Kamera başlat
+async function initCamera() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } }
+    });
+    video.srcObject = stream;
+    await video.play();
+    setStatus('Kamera hazır. Metne yöneltip "Yakala"ya basın.');
+  } catch (e) {
+    setStatus('Kamera açılamadı: ' + e.message, true);
+  }
+}
+
+// Tesseract worker oluştur
+async function getWorker() {
+  if (worker) return worker;
+  setStatus('OCR motoru yükleniyor... (ilk seferde dil paketleri indirilir)');
+  worker = await Tesseract.createWorker('eng+tur+deu+fra+spa+ita+por+rus+ara+chi_sim+jpn+kor', 1, {
+    logger: m => {
+      if (m.status === 'recognizing text') {
+        setStatus(`Metin okunuyor... %${Math.round(m.progress * 100)}`);
+      }
+    }
+  });
+  return worker;
+}
+
+// Görselden metin oku
+async function doOCR(imageSource) {
+  const w = await getWorker();
+  const { data } = await w.recognize(imageSource);
+  return (data.text || '').trim();
+}
+
+// MyMemory çeviri (autodetect)
+async function doTranslate(text) {
+  if (!text) return '';
+  const maxBytes = 450;
+  const chunks = [];
+  let current = '';
+  for (const ch of text) {
+    if (new TextEncoder().encode(current + ch).length > maxBytes) {
+      chunks.push(current);
+      current = ch;
+    } else {
+      current += ch;
+    }
+  }
+  if (current) chunks.push(current);
+
+  const results = [];
+  for (const chunk of chunks) {
+    const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(chunk)}&langpair=${encodeURIComponent('autodetect|' + targetLang.value)}`;
+    try {
+      const res = await fetch(url);
+      const json = await res.json();
+      if (json.responseStatus === 200 && json.responseData?.translatedText) {
+        results.push(json.responseData.translatedText);
+      } else {
+        results.push('[Çeviri hatası: ' + (json.responseDetails || json.responseStatus) + ']');
+      }
+    } catch (e) {
+      results.push('[Bağlantı hatası]');
+    }
+    await new Promise(r => setTimeout(r, 250));
+  }
+  return results.join(' ');
+}
+
+// Ana işlem
+async function process(imageSource) {
+  if (busy) return;
+  busy = true;
+  captureBtn.disabled = true;
+  manualBtn.disabled = true;
+  ocrEl.textContent = '';
+  transEl.textContent = '';
+
+  try {
+    setStatus('Metin okunuyor...');
+    const text = await doOCR(imageSource);
+    if (!text) {
+      setStatus('Yazı bulunamadı. Daha net bir görüntü deneyin.', true);
+      return;
+    }
+    ocrEl.textContent = text;
+
+    setStatus('Çevriliyor (dil otomatik algılanıyor)...');
+    const translated = await doTranslate(text);
+    transEl.textContent = translated;
+    setStatus('✓ Tamamlandı');
+  } catch (e) {
+    console.error(e);
+    setStatus('Hata: ' + e.message, true);
+  } finally {
+    busy = false;
+    captureBtn.disabled = false;
+    manualBtn.disabled = false;
+  }
+}
+
+// Yakala
+captureBtn.addEventListener('click', () => {
+  if (!video.videoWidth) { setStatus('Kamera hazır değil.', true); return; }
+  canvas.width = video.videoWidth;
+  canvas.height = video.videoHeight;
+  canvas.getContext('2d').drawImage(video, 0, 0);
+  process(canvas.toDataURL('image/jpeg', 0.9));
+});
+
+// Galeri
+fileInput.addEventListener('change', e => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => process(reader.result);
+  reader.readAsDataURL(file);
+  fileInput.value = '';
+});
+
+// Klavye
+manualBtn.addEventListener('click', async () => {
+  const text = manualText.value.trim();
+  if (!text || busy) return;
+  busy = true;
+  manualBtn.disabled = true;
+  ocrEl.textContent = text;
+  transEl.textContent = '';
+  try {
+    setStatus('Çevriliyor...');
+    transEl.textContent = await doTranslate(text);
+    setStatus('✓ Tamamlandı');
+  } catch (e) {
+    setStatus('Hata: ' + e.message, true);
+  } finally {
+    busy = false;
+    manualBtn.disabled = false;
+  }
+});
+
+// Başlat
+initCamera();
+getWorker().catch(e => setStatus('OCR yüklenemedi: ' + e.message, true));
+</script>
 </body>
 </html>
