@@ -1,0 +1,12 @@
+{
+  "name": "Kamera Çevirmeni",
+  "short_name": "KameraÇeviri",
+  "description": "Kameranızla yazıyı tarayın, seçtiğiniz dile çevirin",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#ffffff",
+  "theme_color": "#1a73e8",
+  "lang": "tr"
+}
