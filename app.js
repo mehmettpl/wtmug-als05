@@ -25,11 +25,9 @@ const LANG_LABELS = {
   es: 'İspanyolca', it: 'İtalyanca', pt: 'Portekizce', ru: 'Rusça',
   ar: 'Arapça', zh: 'Çince', ja: 'Japonca', ko: 'Korece',
   nl: 'Felemenkçe', pl: 'Lehçe', el: 'Yunanca', he: 'İbranice',
-  hi: 'Hintçe', uk: 'Ukraynaca', cs: 'Çekçe', sv: 'İsveççe',
 };
 
 function setStatus(msg) { statusTextEl.textContent = msg || ''; }
-
 function setBusy(v) {
   busy = v;
   captureBtn.disabled = v;
@@ -41,28 +39,19 @@ async function startCamera() {
     setStatus('Kamera desteklenmiyor.');
     return false;
   }
-
   try {
     stream = await navigator.mediaDevices.getUserMedia({
-      video: {
-        facingMode: { exact: 'environment' },
-        width: { ideal: 1920 },
-        height: { ideal: 1080 },
-      },
+      video: { facingMode: { exact: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } },
       audio: false,
     });
-  } catch (e1) {
+  } catch {
     try {
       stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: { ideal: 'environment' },
-          width: { ideal: 1920 },
-          height: { ideal: 1080 },
-        },
+        video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
         audio: false,
       });
-    } catch (e2) {
-      setStatus('Kamera açılamadı: ' + e2.message);
+    } catch (e) {
+      setStatus('Kamera açılamadı: ' + e.message);
       return false;
     }
   }
@@ -72,20 +61,8 @@ async function startCamera() {
   video.muted = true;
 
   await new Promise((resolve) => {
-    video.onloadedmetadata = () => {
-      video.play().then(resolve).catch(() => resolve());
-    };
+    video.onloadedmetadata = () => video.play().then(resolve).catch(() => resolve());
   });
-
-  try {
-    const track = stream.getVideoTracks()[0];
-    const caps = track.getCapabilities?.() || {};
-    if (caps.focusMode?.includes('continuous')) {
-      await track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] });
-    }
-  } catch (e) {
-    console.log('Focus ayarlanamadı:', e.message);
-  }
 
   setStatus('Kamera hazır. Metne yöneltip "Yakala"ya basın.');
   return true;
@@ -102,11 +79,11 @@ function grabFrame() {
   if (!video.videoWidth || !video.videoHeight) return null;
   canvas.width = video.videoWidth;
   canvas.height = video.videoHeight;
-  const ctx = canvas.getContext('2d');
-  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+  canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
   return canvas.toDataURL('image/jpeg', 0.92);
 }
 
+// ⬇️⬇️⬇️ DÜZELTİLMİŞ processImage ⬇️⬇️⬇️
 async function processImage(imageSource) {
   if (busy) return;
   setBusy(true);
@@ -115,7 +92,7 @@ async function processImage(imageSource) {
   if (detectedLangEl) detectedLangEl.textContent = '';
 
   try {
-    setStatus('Yazının dili algılanıyor ve metin okunuyor...');
+    setStatus('Yazının alfabesi algılanıyor ve metin okunuyor...');
     const ocrResult = await recognizeTextWithLang(imageSource);
 
     if (!ocrResult.text) {
@@ -125,13 +102,15 @@ async function processImage(imageSource) {
 
     ocrTextEl.textContent = ocrResult.text;
 
-    let sourceLabel = 'Otomatik algılanıyor';
+    let sourceLabel = '';
     let sourceForApi = 'autodetect';
 
     if (ocrResult.script === 'latin') {
-      sourceLabel = 'Latin alfabesi (MyMemory algılayacak)';
+      // Latin alfabesinde MyMemory autodetect kullan (Türkçe/İngilizce ayrımı için)
+      sourceLabel = 'Latin alfabesi (MyMemory dili algılayacak)';
       sourceForApi = 'autodetect';
     } else {
+      // Arap, Kiril, Han vb. için doğrudan ISO kodu gönder
       const iso = ocrResult.isoLang;
       sourceLabel = LANG_LABELS[iso] || iso.toUpperCase();
       sourceForApi = iso;
@@ -139,10 +118,11 @@ async function processImage(imageSource) {
 
     if (detectedLangEl) {
       detectedLangEl.textContent =
-        `Tespit edilen kaynak: ${sourceLabel} • Güven: %${Math.round(ocrResult.confidence)}`;
+        `Algılanan yazı sistemi: ${ocrResult.script.toUpperCase()} • ${sourceLabel} • Güven: %${ocrResult.confidence}`;
     }
 
     const targetLang = targetLangSelect.value;
+
     if (sourceForApi === targetLang) {
       translatedTextEl.textContent = ocrResult.text;
       setStatus('Kaynak ve hedef dil aynı, çeviri yapılmadı.');
@@ -160,10 +140,11 @@ async function processImage(imageSource) {
     setBusy(false);
   }
 }
+// ⬆️⬆️⬆️ DÜZELTİLMİŞ processImage BİTTİ ⬆️⬆️⬆️
 
 async function captureAndTranslate() {
   const dataUrl = grabFrame();
-  if (!dataUrl) { setStatus('Kamera henüz hazır değil.'); return; }
+  if (!dataUrl) { setStatus('Kamera hazır değil.'); return; }
   await processImage(dataUrl);
 }
 
@@ -180,7 +161,7 @@ function toggleAutoMode() {
     autoBtn.classList.toggle('active', autoMode);
   }
   if (autoMode) {
-    setStatus('Canlı tarama açık: her 2 saniyede bir taranıyor...');
+    setStatus('Canlı tarama açık...');
     autoTimer = setInterval(autoScanLoop, 2000);
     autoScanLoop();
   } else {
@@ -195,10 +176,7 @@ if (autoBtn) autoBtn.addEventListener('click', toggleAutoMode);
 fileInput.addEventListener('change', (e) => {
   const file = e.target.files?.[0];
   if (!file) return;
-  if (!file.type.startsWith('image/')) {
-    setStatus('Lütfen görsel dosyası seçin.');
-    return;
-  }
+  if (!file.type.startsWith('image/')) { setStatus('Lütfen görsel seçin.'); return; }
   const reader = new FileReader();
   reader.onload = () => processImage(reader.result);
   reader.onerror = () => setStatus('Dosya okunamadı.');
@@ -247,9 +225,6 @@ window.addEventListener('load', async () => {
     await deferredPrompt.userChoice;
     installBtn.style.display = 'none';
     deferredPrompt = null;
-  });
-  window.addEventListener('appinstalled', () => {
-    if (installBtn) installBtn.style.display = 'none';
   });
 
   document.addEventListener('visibilitychange', async () => {
