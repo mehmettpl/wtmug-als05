@@ -1,10 +1,9 @@
-// Tesseract.js sarmalayıcı — cihaz üzeri OCR + dil tespiti
+// Tesseract.js sarmalayıcı — cihaz üzeri OCR + dil/alfabe tespiti
 let worker = null;
 let workerReady = false;
 let initPromise = null;
 let currentLangs = null;
 
-// Tesseract dil kodu → ISO 639-1 (MyMemory için)
 const TESS_TO_ISO = {
   eng: 'en', tur: 'tr', deu: 'de', fra: 'fr', spa: 'es',
   ita: 'it', por: 'pt', rus: 'ru', ara: 'ar', chi_sim: 'zh',
@@ -12,36 +11,36 @@ const TESS_TO_ISO = {
   heb: 'he', hin: 'hi', ukr: 'uk', ces: 'cs', swe: 'sv',
 };
 
-function updateProgress(progress) {
+function updateProgress(p) {
   const bar = document.getElementById('ocr-progress');
-  if (bar) bar.style.width = `${Math.round(progress * 100)}%`;
+  if (bar) bar.style.width = `${Math.round(p * 100)}%`;
 }
 
 /**
- * Belirli dil paketlerini yükleyerek worker oluşturur.
+ * Worker oluşturur. OSD (dil/alfabe tespiti) için legacyCore ve legacyLang
+ * parametreleri ZORUNLUDUR, aksi halde worker.detect() çalışmaz.
  */
 export async function initOCR(langs = 'eng+tur+deu+fra+spa+ita+por+rus+ara+chi_sim+jpn+kor') {
   if (typeof Tesseract === 'undefined') {
-    throw new Error('Tesseract.js yüklenemedi. İnternet bağlantınızı kontrol edin.');
+    throw new Error('Tesseract.js yüklenemedi.');
   }
 
   if (worker && currentLangs === langs) return worker;
 
+  // Farklı dil paketi gerekiyorsa worker'ı yeniden başlat
   if (worker && currentLangs !== langs) {
-    try {
-      await worker.reinitialize(langs);
-      currentLangs = langs;
-      return worker;
-    } catch {
-      try { await worker.terminate(); } catch {}
-      worker = null;
-    }
+    try { await worker.terminate(); } catch {}
+    worker = null;
+    initPromise = null;
   }
 
   if (initPromise && !worker) return initPromise;
 
   initPromise = (async () => {
     worker = await Tesseract.createWorker(langs, 1, {
+      // ⬇️⬇️⬇️ OSD İÇİN KRİTİK PARAMETRELER ⬇️⬇️⬇️
+      legacyCore: true,
+      legacyLang: true,
       logger: (m) => {
         if (m.status === 'recognizing text' && typeof m.progress === 'number') {
           updateProgress(m.progress);
@@ -57,76 +56,70 @@ export async function initOCR(langs = 'eng+tur+deu+fra+spa+ita+por+rus+ara+chi_s
 }
 
 /**
- * Görseldeki metnin alfabesini tespit eder (OSD).
+ * Görseldeki yazının alfabesini tespit eder.
+ * worker.detect() çalışabilmesi için legacyCore/legacyLang true olmalı.
  */
-export async function detectLanguage(imageSource) {
+async function detectScript(imageSource) {
   if (!worker) await initOCR();
-
   try {
     const osd = await worker.detect(imageSource);
-    if (osd?.data?.script) {
-      const script = osd.data.script.toLowerCase();
-      const scriptToLang = {
-        latin: 'eng',
-        cyrillic: 'rus',
-        arabic: 'ara',
-        han: 'chi_sim',
-        han_s: 'chi_sim',
-        han_t: 'chi_tra',
-        japanese: 'jpn',
-        korean: 'kor',
-        greek: 'ell',
-        hebrew: 'heb',
-        devanagari: 'hin',
-      };
-      const detected = scriptToLang[script] || 'eng';
-      return {
-        tesseractLang: detected,
-        script,
-        confidence: osd.data.confidence ?? 0,
-      };
-    }
+    const script = (osd?.data?.script || 'Latin').toLowerCase();
+    return { script, confidence: osd?.data?.script_confidence || 0 };
   } catch (e) {
-    console.warn('OSD başarısız, varsayılan kullanılacak:', e);
+    console.warn('OSD başarısız:', e);
+    return { script: 'latin', confidence: 0 };
   }
-
-  return { tesseractLang: 'eng', script: 'latin', confidence: 0 };
 }
 
+const SCRIPT_TO_TESS = {
+  latin: 'eng',
+  cyrillic: 'rus',
+  arabic: 'ara',
+  han: 'chi_sim',
+  han_s: 'chi_sim',
+  han_t: 'chi_tra',
+  japanese: 'jpn',
+  korean: 'kor',
+  greek: 'ell',
+  hebrew: 'heb',
+  devanagari: 'hin',
+};
+
 /**
- * Ana fonksiyon: Görsel → Metin + Dil Bilgisi
+ * Ana fonksiyon: Görsel → Alfabe tespiti → OCR → Metin + Dil Bilgisi
  */
 export async function recognizeTextWithLang(imageSource) {
   if (!worker) await initOCR();
   updateProgress(0);
 
-  const detection = await detectLanguage(imageSource);
+  // 1) Alfabe tespiti (OSD)
+  const det = await detectScript(imageSource);
+  const tessBase = SCRIPT_TO_TESS[det.script] || 'eng';
 
-  let ocrLangs = detection.tesseractLang;
-  if (detection.script === 'latin') {
-    ocrLangs = 'eng+tur+deu+fra+spa+ita+por';
-  }
+  // 2) OCR için dil paketleri:
+  //    - Latin alfabesinde birden fazla dil yükle (MyMemory autodetect ile birleşince doğru sonuç verir)
+  //    - Diğer alfabelerde tek dil yeterli
+  const ocrLangs = (det.script === 'latin')
+    ? 'eng+tur+deu+fra+spa+ita+por'
+    : tessBase;
 
-  if (currentLangs !== ocrLangs) {
-    await initOCR(ocrLangs);
-  }
+  await initOCR(ocrLangs);
 
+  // 3) OCR
   const result = await worker.recognize(imageSource);
-  updateProgress(1);
-
   const text = (result?.data?.text || '').trim();
-  const confidence = result?.data?.confidence ?? 0;
-  const isoLang = TESS_TO_ISO[detection.tesseractLang] || 'en';
+  const confidence = Math.round(result?.data?.confidence || 0);
+
+  const isoLang = TESS_TO_ISO[tessBase] || 'en';
 
   setTimeout(() => updateProgress(0), 300);
 
   return {
     text,
     confidence,
-    tesseractLang: detection.tesseractLang,
+    script: det.script,
     isoLang,
-    script: detection.script,
-    needsAutodetect: detection.script === 'latin',
+    needsAutodetect: det.script === 'latin',
   };
 }
 
