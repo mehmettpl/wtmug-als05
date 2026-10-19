@@ -12,12 +12,13 @@
   select, button, textarea { font-size: 0.95rem; padding: 10px; border-radius: 8px; border: 1px solid #ddd; }
   button { background: #1a73e8; color: #fff; border: none; font-weight: 600; cursor: pointer; }
   button:disabled { opacity: 0.5; }
-  #video { width: 100%; max-height: 50vh; background: #000; border-radius: 12px; object-fit: cover; }
+  #video { width: 100%; max-height: 45vh; background: #000; border-radius: 12px; object-fit: cover; }
   #canvas { display: none; }
-  .box { background: #fff; border-radius: 12px; padding: 12px; margin-top: 10px; min-height: 60px; white-space: pre-wrap; word-break: break-word; }
+  .box { background: #fff; border-radius: 12px; padding: 12px; margin-top: 8px; min-height: 50px; white-space: pre-wrap; word-break: break-word; font-size: 0.95rem; }
   .status { font-size: 0.85rem; color: #666; margin: 6px 0; min-height: 18px; }
-  .label { font-size: 0.8rem; color: #1a73e8; font-weight: 600; margin-top: 8px; }
+  .label { font-size: 0.8rem; color: #1a73e8; font-weight: 600; margin-top: 12px; }
   .error { color: #dc2626; }
+  .lang-info { font-size: 0.8rem; color: #059669; font-weight: 600; margin-top: 4px; }
 </style>
 </head>
 <body>
@@ -42,6 +43,7 @@
 <canvas id="canvas"></canvas>
 
 <div id="status" class="status">Kamera başlatılıyor...</div>
+<div id="langInfo" class="lang-info"></div>
 
 <div class="label">OCR Sonucu</div>
 <div id="ocrText" class="box"></div>
@@ -59,6 +61,7 @@
 const video = document.getElementById('video');
 const canvas = document.getElementById('canvas');
 const statusEl = document.getElementById('status');
+const langInfoEl = document.getElementById('langInfo');
 const ocrEl = document.getElementById('ocrText');
 const transEl = document.getElementById('translatedText');
 const targetLang = document.getElementById('targetLang');
@@ -75,7 +78,7 @@ function setStatus(msg, isError) {
   statusEl.className = 'status' + (isError ? ' error' : '');
 }
 
-// Kamera başlat
+// Kamera
 async function initCamera() {
   try {
     const stream = await navigator.mediaDevices.getUserMedia({
@@ -89,30 +92,63 @@ async function initCamera() {
   }
 }
 
-// Tesseract worker oluştur
+// OCR worker — daha az dil paketi = daha yüksek doğruluk
 async function getWorker() {
   if (worker) return worker;
-  setStatus('OCR motoru yükleniyor... (ilk seferde dil paketleri indirilir)');
-  worker = await Tesseract.createWorker('eng+tur+deu+fra+spa+ita+por+rus+ara+chi_sim+jpn+kor', 1, {
+  setStatus('OCR motoru yükleniyor...');
+  worker = await Tesseract.createWorker('eng+tur+deu+fra+ara+rus', 1, {
     logger: m => {
       if (m.status === 'recognizing text') {
         setStatus(`Metin okunuyor... %${Math.round(m.progress * 100)}`);
       }
     }
   });
+  // Sayfa segmentasyon modu: tek blok (tabela/menü için ideal)
+  await worker.setParameters({ tessedit_pageseg_mode: '6' });
   return worker;
 }
 
-// Görselden metin oku
+// Görüntü ön işleme: gri ton + kontrast artırma
+function preprocess(imageSource) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      const c = document.createElement('canvas');
+      const maxW = 1500;
+      let w = img.width, h = img.height;
+      if (w > maxW) { h = h * (maxW / w); w = maxW; }
+      c.width = w; c.height = h;
+      const ctx = c.getContext('2d');
+      ctx.drawImage(img, 0, 0, w, h);
+
+      const imageData = ctx.getImageData(0, 0, w, h);
+      const d = imageData.data;
+
+      // Gri tonlama + kontrast
+      for (let i = 0; i < d.length; i += 4) {
+        let gray = 0.299 * d[i] + 0.587 * d[i+1] + 0.114 * d[i+2];
+        // Kontrast artır (threshold benzeri)
+        gray = gray > 128 ? 255 : 0;
+        d[i] = d[i+1] = d[i+2] = gray;
+      }
+      ctx.putImageData(imageData, 0, 0);
+      resolve(c.toDataURL('image/png'));
+    };
+    img.src = imageSource;
+  });
+}
+
+// OCR
 async function doOCR(imageSource) {
   const w = await getWorker();
-  const { data } = await w.recognize(imageSource);
+  const processed = await preprocess(imageSource);
+  const { data } = await w.recognize(processed);
   return (data.text || '').trim();
 }
 
-// MyMemory çeviri (autodetect)
+// MyMemory çeviri + kaynak dil bilgisi
 async function doTranslate(text) {
-  if (!text) return '';
+  if (!text) return { translated: '', detectedLang: '' };
   const maxBytes = 450;
   const chunks = [];
   let current = '';
@@ -120,13 +156,12 @@ async function doTranslate(text) {
     if (new TextEncoder().encode(current + ch).length > maxBytes) {
       chunks.push(current);
       current = ch;
-    } else {
-      current += ch;
-    }
+    } else { current += ch; }
   }
   if (current) chunks.push(current);
 
   const results = [];
+  let detectedLang = '';
   for (const chunk of chunks) {
     const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(chunk)}&langpair=${encodeURIComponent('autodetect|' + targetLang.value)}`;
     try {
@@ -134,6 +169,10 @@ async function doTranslate(text) {
       const json = await res.json();
       if (json.responseStatus === 200 && json.responseData?.translatedText) {
         results.push(json.responseData.translatedText);
+        // MyMemory yanıtında kaynak dil bilgisi varsa al
+        if (!detectedLang && json.responseData.detectedLanguage) {
+          detectedLang = json.responseData.detectedLanguage;
+        }
       } else {
         results.push('[Çeviri hatası: ' + (json.responseDetails || json.responseStatus) + ']');
       }
@@ -142,7 +181,18 @@ async function doTranslate(text) {
     }
     await new Promise(r => setTimeout(r, 250));
   }
-  return results.join(' ');
+  return { translated: results.join(' '), detectedLang };
+}
+
+// Dil kodunu okunabilir isme çevir
+function langName(code) {
+  const map = {
+    'tr': 'Türkçe', 'en': 'İngilizce', 'de': 'Almanca', 'fr': 'Fransızca',
+    'ar': 'Arapça', 'ru': 'Rusça', 'es': 'İspanyolca', 'it': 'İtalyanca',
+    'pt': 'Portekizce', 'nl': 'Felemenkçe', 'pl': 'Lehçe', 'el': 'Yunanca',
+    'zh': 'Çince', 'ja': 'Japonca', 'ko': 'Korece'
+  };
+  return map[code] || code.toUpperCase();
 }
 
 // Ana işlem
@@ -153,6 +203,7 @@ async function process(imageSource) {
   manualBtn.disabled = true;
   ocrEl.textContent = '';
   transEl.textContent = '';
+  langInfoEl.textContent = '';
 
   try {
     setStatus('Metin okunuyor...');
@@ -163,9 +214,16 @@ async function process(imageSource) {
     }
     ocrEl.textContent = text;
 
-    setStatus('Çevriliyor (dil otomatik algılanıyor)...');
-    const translated = await doTranslate(text);
+    setStatus('Dil algılanıyor ve çevriliyor...');
+    const { translated, detectedLang } = await doTranslate(text);
     transEl.textContent = translated;
+
+    if (detectedLang) {
+      langInfoEl.textContent = `Algılanan kaynak dil: ${langName(detectedLang)} (${detectedLang})`;
+    } else {
+      langInfoEl.textContent = 'Kaynak dil bilgisi alınamadı (MyMemory bu çift için döndürmedi).';
+    }
+
     setStatus('✓ Tamamlandı');
   } catch (e) {
     console.error(e);
@@ -204,9 +262,12 @@ manualBtn.addEventListener('click', async () => {
   manualBtn.disabled = true;
   ocrEl.textContent = text;
   transEl.textContent = '';
+  langInfoEl.textContent = '';
   try {
     setStatus('Çevriliyor...');
-    transEl.textContent = await doTranslate(text);
+    const { translated, detectedLang } = await doTranslate(text);
+    transEl.textContent = translated;
+    if (detectedLang) langInfoEl.textContent = `Algılanan kaynak dil: ${langName(detectedLang)} (${detectedLang})`;
     setStatus('✓ Tamamlandı');
   } catch (e) {
     setStatus('Hata: ' + e.message, true);
