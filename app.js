@@ -1,4 +1,4 @@
-import { initOCR, recognizeTextWithLang, terminateOCR } from './ocr.js';
+import { initOCR, recognizeText, terminateOCR } from './ocr.js';
 import { translateText } from './translate.js';
 
 const video = document.getElementById('camera-preview');
@@ -20,13 +20,6 @@ let busy = false;
 let autoMode = false;
 let autoTimer = null;
 
-const LANG_LABELS = {
-  en: 'İngilizce', tr: 'Türkçe', de: 'Almanca', fr: 'Fransızca',
-  es: 'İspanyolca', it: 'İtalyanca', pt: 'Portekizce', ru: 'Rusça',
-  ar: 'Arapça', zh: 'Çince', ja: 'Japonca', ko: 'Korece',
-  nl: 'Felemenkçe', pl: 'Lehçe', el: 'Yunanca', he: 'İbranice',
-};
-
 function setStatus(msg) { statusTextEl.textContent = msg || ''; }
 function setBusy(v) {
   busy = v;
@@ -41,19 +34,12 @@ async function startCamera() {
   }
   try {
     stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: { exact: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } },
+      video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } },
       audio: false,
     });
-  } catch {
-    try {
-      stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
-        audio: false,
-      });
-    } catch (e) {
-      setStatus('Kamera açılamadı: ' + e.message);
-      return false;
-    }
+  } catch (e) {
+    setStatus('Kamera açılamadı: ' + e.message);
+    return false;
   }
 
   video.srcObject = stream;
@@ -83,7 +69,10 @@ function grabFrame() {
   return canvas.toDataURL('image/jpeg', 0.92);
 }
 
-// ⬇️⬇️⬇️ DÜZELTİLMİŞ processImage ⬇️⬇️⬇️
+/**
+ * Görsel → OCR → MyMemory autodetect çeviri
+ * Dil algılama TAMAMEN MyMemory'ye bırakıldı.
+ */
 async function processImage(imageSource) {
   if (busy) return;
   setBusy(true);
@@ -92,45 +81,24 @@ async function processImage(imageSource) {
   if (detectedLangEl) detectedLangEl.textContent = '';
 
   try {
-    setStatus('Yazının alfabesi algılanıyor ve metin okunuyor...');
-    const ocrResult = await recognizeTextWithLang(imageSource);
+    // 1) OCR (sadece metin çıkar, dil algılama yok)
+    setStatus('Metin okunuyor... (ilk seferde dil paketleri indirilebilir)');
+    const { text, confidence } = await recognizeText(imageSource);
 
-    if (!ocrResult.text) {
+    if (!text) {
       setStatus('Yazı bulunamadı. Daha net bir görüntü deneyin.');
       return;
     }
 
-    ocrTextEl.textContent = ocrResult.text;
-
-    let sourceLabel = '';
-    let sourceForApi = 'autodetect';
-
-    if (ocrResult.script === 'latin') {
-      // Latin alfabesinde MyMemory autodetect kullan (Türkçe/İngilizce ayrımı için)
-      sourceLabel = 'Latin alfabesi (MyMemory dili algılayacak)';
-      sourceForApi = 'autodetect';
-    } else {
-      // Arap, Kiril, Han vb. için doğrudan ISO kodu gönder
-      const iso = ocrResult.isoLang;
-      sourceLabel = LANG_LABELS[iso] || iso.toUpperCase();
-      sourceForApi = iso;
-    }
-
+    ocrTextEl.textContent = text;
     if (detectedLangEl) {
-      detectedLangEl.textContent =
-        `Algılanan yazı sistemi: ${ocrResult.script.toUpperCase()} • ${sourceLabel} • Güven: %${ocrResult.confidence}`;
+      detectedLangEl.textContent = `OCR güveni: %${confidence}`;
     }
 
+    // 2) Çeviri — MyMemory autodetect kullan
     const targetLang = targetLangSelect.value;
-
-    if (sourceForApi === targetLang) {
-      translatedTextEl.textContent = ocrResult.text;
-      setStatus('Kaynak ve hedef dil aynı, çeviri yapılmadı.');
-      return;
-    }
-
-    setStatus(`Çeviriliyor (${sourceLabel} → ${LANG_LABELS[targetLang] || targetLang})...`);
-    const translated = await translateText(ocrResult.text, targetLang, sourceForApi);
+    setStatus('Dil algılanıyor ve çevriliyor (MyMemory)...');
+    const translated = await translateText(text, targetLang, 'autodetect');
     translatedTextEl.textContent = translated;
     setStatus('✓ Tamamlandı');
   } catch (err) {
@@ -140,7 +108,6 @@ async function processImage(imageSource) {
     setBusy(false);
   }
 }
-// ⬆️⬆️⬆️ DÜZELTİLMİŞ processImage BİTTİ ⬆️⬆️⬆️
 
 async function captureAndTranslate() {
   const dataUrl = grabFrame();
@@ -157,12 +124,12 @@ async function autoScanLoop() {
 function toggleAutoMode() {
   autoMode = !autoMode;
   if (autoBtn) {
-    autoBtn.textContent = autoMode ? '🛑 Canlı Taramayı Durdur' : '🔄 Canlı Tarama';
+    autoBtn.textContent = autoMode ? '🛑 Durdur' : '🔄 Canlı Tarama';
     autoBtn.classList.toggle('active', autoMode);
   }
   if (autoMode) {
     setStatus('Canlı tarama açık...');
-    autoTimer = setInterval(autoScanLoop, 2000);
+    autoTimer = setInterval(autoScanLoop, 2500);
     autoScanLoop();
   } else {
     if (autoTimer) { clearInterval(autoTimer); autoTimer = null; }
@@ -190,7 +157,6 @@ manualTranslateBtn.addEventListener('click', async () => {
   setBusy(true);
   translatedTextEl.textContent = '';
   ocrTextEl.textContent = text;
-  if (detectedLangEl) detectedLangEl.textContent = 'Klavye girişi (dil otomatik algılanacak)';
 
   try {
     setStatus('Çevriliyor...');
